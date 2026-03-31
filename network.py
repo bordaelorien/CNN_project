@@ -94,10 +94,35 @@ class CNN:
 
 
 
+class CNNLayer:
+    """Une couche du CNN."""
+
+    def im2col(self, input, output_shape, filter_size, stride, padding=(0, 0), padding_mode="none"):
+        if padding_mode == "zeros":
+            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="constant")
+
+        elif padding_mode == "edge":
+            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="edge")
+        
+        #dimensions de l'input après padding 
+        W, H, C = x.shape
+
+        #dimenions de l'output
+        F = filter_size
+        W2, H2, D2 = output_shape
+
+        x_col = np.zeros((F * F * C, W2 * H2))
+
+        for colonne in range(W2 * H2):
+            for i in range(0, W - F + 1, stride):
+                for j in range(0, H - F + 1, stride):
+                    x_col[:, colonne] = x[i:i+F, j:j+F, :].reshape(-1)
+        
+        return x_col
 
 
 
-class ConvLayer:
+class ConvLayer(CNNLayer):
     """Une couche de neurones convolutive"""
 
     def __init__(self, input_shape, *, num_filters, filter_size=3, stride=1, padding="zeros"):
@@ -150,35 +175,13 @@ class ConvLayer:
         """
         x_col = self.im2col(input, self.output_shape, self.filter_size, self.stride, self.padding, self.padding_mode)
         f_row = self.filters.reshape(self.num_filters, -1)
-        output = f_row @ x_col + self.biais
+        output = f_row @ x_col + self.biases
         self.activations = output.reshape(self.output_shape)
-
-    
-    def im2col(self, input, output_shape, filter_size, stride, padding, padding_mode):
-        if padding_mode == "zeros":
-            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="constant")
-
-        elif padding_mode == "edge":
-            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="edge")
-        
-        #dimensions de l'input après padding 
-        W, H, C = x.shape
-
-        #dimenions de l'output
-        F = filter_size
-        W2, H2, D2 = output_shape
-
-        x_col = np.zeros((F * F * C, W2 * H2))
-
-        for colonne in range(W2 * H2):
-            for i in range(0, W - F + 1, stride):
-                for j in range(0, H - F + 1, stride):
-                    x_col[:, colonne] = x[i:i+F, j:j+F, :].reshape(-1)
-        
-        return x_col
+        return self.activations
 
 
-class PoolLayer:
+
+class PoolLayer(CNNLayer):
     """Une couche de max pooling"""
 
     def __init__(self, *, pooling_size=2, stride=2):
@@ -187,7 +190,8 @@ class PoolLayer:
             pooling_size (int): Taille de la fenêtre de pooling. Defaults to 2.
             stride (int): Stride. Defaults to 2.
         """
-        pass
+        self.pooling_size = pooling_size
+        self.stride = stride
 
 
     def forward(self, input):
@@ -198,12 +202,18 @@ class PoolLayer:
 
         Returns:
             array 3D de dim W2 x H2 x D2 : Valeurs d'activation de cette couche.  
-                W2 = 1 + (W2 - filter_size)/stride, H2 = 1 + (H2 - filter_size)/stride, D2 = D1
+                W2 = 1 + (W2 - pooling_size)/stride, H2 = 1 + (H2 - pooling_size)/stride, D2 = D1
         """
-        pass
+        W, H, D = input.shape
+        W2 = 1 + (W - self.pooling_size) // self.stride
+        H2 = 1 + (H - self.pooling_size) // self.stride
+        D2 = D
+        x_col = self.im2col(input, output_shape=(W2, H2, D2), filter_size=self.pooling_size, stride=self.stride)
+        output = np.maximum(x_col, axis=2)
+        self.activations = output.reshape(W2, H2, D2)
 
 
-class ReluLayer:
+class ReluLayer(CNNLayer):
     """Une couche ReLu"""
 
     def __init__(self):
@@ -222,7 +232,7 @@ class ReluLayer:
         return np.maximum(input, 0)
 
 
-class FCLayer:
+class FCLayer(CNNLayer):
     """Une couche de neurones dense (fully-connected layer)"""
 
     def __init__(self, input_shape, num_neurons):
@@ -249,7 +259,9 @@ class FCLayer:
 
 
 cnn = CNN(img_shape=(300,300))
-cnn.addLayer(type="CONV", num_filters=96)
-img = np.zeros((32, 32, 3))
+cnn.addLayer(type="CONV", num_filters=36)
+img = np.zeros((300, 300, 3))
 cnn.forwardProp(img)
 print(cnn.layers)
+
+
