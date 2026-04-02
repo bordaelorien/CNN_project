@@ -5,7 +5,7 @@ class CNN:
 
     def __init__(self, img_shape):
         self.layers = [] #liste des couches de neurones
-        self.img_shape = (*img_shape, 3) #taille de l'image en entrée (image RGB donc la troisième dimension est 3)
+        self.img_shape = (*img_shape, 1) #taille de l'image en entrée (image RGB donc la troisième dimension est 3)
     
 
     def addLayer(self, type, **kwargs):
@@ -15,11 +15,12 @@ class CNN:
             type (str): type de couche à ajouter. 4 types: "CONV", "POOL", "RELU", "FC".
             Les autres arguments sont les hyperparamètres de la couche.
         """
-        
-        #création d'une nouvelle couche du type spécfifié
+
+        #taille de couche précédente si elle existe, sinon taille de l'image en entrée
         input_shape = self.layers[-1].shape if len(self.layers) > 0 else self.img_shape
+
+        #création d'une nouvelle couche du type spécfifié
         if type == "CONV":
-            #taille de couche précédente si elle existe, sinon taille de l'image en entrée
             new_layer = ConvLayer(input_shape, **kwargs)
 
         elif type == "POOL":
@@ -29,7 +30,6 @@ class CNN:
             new_layer = ReluLayer(input_shape)
 
         elif type == "FC":
-            #taille de couche précédente si elle existe, sinon taille de l'image en entrée
             new_layer = FCLayer(input_shape, **kwargs)
 
         else:
@@ -38,6 +38,46 @@ class CNN:
 
         #ajout de la couche à la liste
         self.layers.append(new_layer)
+
+    
+
+
+    def train(self, x_train, y_train, x_test, y_test, batch_size=10, epochs=20, learning_rate=0.005):
+        n_samples = len(x_train)
+        
+        for epoch in range(epochs):
+            indices = np.arange(n_samples)
+            batch_idx = np.random.choice(indices, batch_size)
+            
+            for i in batch_idx:
+                image = x_train[i]
+                label = y_train[i]
+                
+                #forward pass
+                output = self.forwardProp(image)
+                
+                #encodage one hot
+                target = np.zeros_like(output)
+                target[label] = 1
+                
+                #backward pass
+                self.backwardProp(output, target, learning_rate)
+
+            tx_reussite = self.test(x_test, y_test) 
+            print(f"Époque {epoch+1}/{epochs} - Taux de réussite: {tx_reussite:.2f}")
+
+
+    def test(self, x_test, y_test):
+        #nombre d'images correctement identifiées
+        score = 0
+
+        for image, label in zip(x_test, y_test):
+            output = np.argmax(self.forwardProp(image).flatten())
+            if output == label:
+                score += 1
+
+        #taux de réussite  
+        return score*100/len(x_test)
 
     
     def forwardProp(self, input_image):
@@ -60,12 +100,18 @@ class CNN:
         for layer in self.layers:
             activations = layer.forward(activations)
         
-        activations = activations.flatten()
         return self.softmax(activations)
         
 
+    def backwardProp(self, output, expected, learning_rate):
+        #erreur de la dernière couche avec softmax + cross-entropy
+        error = output - expected
 
+        #calcul de l'erreur et mise à jour des poids par couche
+        for layer in reversed(self.layers):
+            error = layer.backward(error, learning_rate)
     
+
     def predict(self, input_image):
         """Prédit le label d'une image.
 
@@ -75,7 +121,7 @@ class CNN:
         Returns:
             int: Label prédit par le CNN.
         """
-        return np.argmax(self.forwardProp(input_image))
+        return np.argmax(self.forwardProp(input_image).flatten())
     
 
     def softmax(self, x):
@@ -92,38 +138,6 @@ class CNN:
         return exp_x / exp_x.sum(axis=0)
 
 
-
-
-class CNNLayer:
-    """Une couche du CNN."""
-
-    def im2col(self, input, output_shape, filter_size, stride, padding=(0, 0), padding_mode="none"):
-        if padding_mode == "zeros":
-            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="constant")
-
-        elif padding_mode == "edge":
-            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="edge")
-        
-        else:
-            x = input
-        
-        #dimensions de l'input après padding 
-        W, H, D = x.shape
-
-        #dimenions de l'output
-        F = filter_size
-        W2, H2, D2 = output_shape
-
-        x_col = np.zeros((F * F * D, W2 * H2))
-        print(x_col.shape)
-
-        colonne = 0
-        for i in range(0, W - F + 1, stride):
-            for j in range(0, H - F + 1, stride):
-                x_col[:, colonne] = x[i:i+F, j:j+F, :].flatten()
-                colonne += 1
-        
-        return x_col
 
 
 
@@ -144,6 +158,7 @@ class ConvLayer:
         self.filter_size = filter_size
         self.stride = stride
         self.padding_mode = padding
+        self.input_shape = input_shape
 
         #calcul des dimensions de l'output et du padding
         W1, H1, D1 = input_shape
@@ -178,39 +193,34 @@ class ConvLayer:
                 Si padding="none", alors l'output a les mêmes dimensions que l'input. 
                 Sinon W2 = 1 + (W1 - filter_size)/stride, H2 = 1 + (H1 - filter_size)/stride, D2 = num_filters
         """
-        x_col = self.im2col(input, self.shape, self.filter_size, self.stride, self.padding, self.padding_mode)
+        self.x_col = im2col(input, self.shape, self.filter_size, self.stride, self.padding, self.padding_mode)
         f_row = self.filters.reshape(self.num_filters, -1)
-        output = f_row @ x_col + self.biases
-        self.activations = output.reshape(self.shape)
-        return self.activations
+        output = f_row @ self.x_col + self.biases
+        W2, H2, D2 = self.shape
+        return output.reshape(D2, W2, H2).transpose(1, 2, 0)
     
 
-    def im2col(self, input, output_shape, filter_size, stride, padding=(0, 0), padding_mode="none"):
-        if padding_mode == "zeros":
-            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="constant")
+    def backward(self, output_error, learning_rate):
+        W2, H2, D2 = self.shape # = output_error.shape si tout va bien
+        output_error = output_error.transpose(2, 0, 1).reshape(D2, -1)
 
-        elif padding_mode == "edge":
-            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="edge")
+        #gradient des filtres et des biais
+        dF = output_error @ self.x_col.T
+        dF = dF.reshape(self.filters.shape)
+        dB = np.sum(output_error, axis=1).reshape(D2, 1)
+
+        #mise à jour des poids
+        self.filters -= learning_rate * dF
+        self.biases -= learning_rate * dB
+
+        #calcul de l'erreur de l'input
+        f_row = self.filters.reshape(self.num_filters, -1)
+        dx_col = f_row.T @ output_error
+
+        #on la remet dans les bonnes dimensions puis on propage
+        return col2im(dx_col, self.input_shape, self.filter_size, self.stride, self.padding)
         
-        else:
-            x = input
-        
-        #dimensions de l'input après padding 
-        W, H, D = x.shape
 
-        #dimenions de l'output
-        F = filter_size
-        W2, H2, D2 = output_shape
-
-        x_col = np.zeros((F * F * D, W2 * H2))
-
-        colonne = 0
-        for i in range(0, W - F + 1, stride):
-            for j in range(0, H - F + 1, stride):
-                x_col[:, colonne] = x[i:i+F, j:j+F, :].flatten()
-                colonne += 1
-        
-        return x_col
 
 
 
@@ -244,16 +254,80 @@ class PoolLayer:
             array 3D de dim W2 x H2 x D2 : Valeurs d'activation de cette couche.  
                 W2 = 1 + (W2 - pooling_size)/stride, H2 = 1 + (H2 - pooling_size)/stride, D2 = D1
         """ 
-        W, H, D = input.shape
+        """
+        self.input = input
         F = self.pooling_size
+        W2, H2, D2 = self.shape
+
         output = np.zeros(self.shape)
+        #masque qui retient les indices des valeurs maximales, il est utile dans la backward
+        self.mask = np.zeros_like(self.input)
 
-        for i in range(0, W - F + 1, self.stride):
-            for j in range(0, H - F + 1, self.stride):
-                output[i//self.stride, j//self.stride] = input[i:i+F, j:j+F, :].max(axis=(0, 1))
+        for i in range(W2):
+            for j in range(H2):
+                istart, jstart = i * self.stride, j * self.stride
+                region = input[istart:istart+F, jstart:jstart+F, :]
+                
+                #calcul du max sur la région
+                output[i, j, :] = np.max(region, axis=(0, 1))
 
-        self.activations = output
-        return self.activations
+                for d in range(D2):
+                    #dans chaque canal, on cherche l'indice de la/les valeur(s) max
+                    max_value = output[i, j, d]
+
+                    #on met à jour le masque dans la région
+                    local_mask = (region[:, :, d] == max_value)
+                    self.mask[istart:istart+F, jstart:jstart+F, d] += local_mask
+        """
+        self.input_shape = input.shape
+        F = self.pooling_size
+        D = self.input_shape[2]
+        W2, H2, D2 = self.shape
+        
+        x_col = im2col(input, self.shape, F, self.stride)
+        x_col = x_col.reshape(F * F, -1)
+        
+        #calcul du max sur chaque région
+        max_values = np.max(x_col, axis=0)
+        
+        #création d'un masque qui retient les indices des valeurs maximales, il est utile dans la backward
+        self.mask = (x_col == max_values)
+        
+        #on renvoie les max
+        return max_values.reshape(D, W2, H2).transpose(1, 2, 0)
+
+    
+    def backward(self, output_error, learning_rate):
+        """input_error = np.zeros_like(self.input)
+        W2, H2, D2 = self.shape
+        F = self.pooling_size
+
+        for i in range(W2):
+            for j in range(H2):
+                istart, jstart = i * self.stride, j * self.stride
+                
+                #on récupère l'erreur du pixel (i, j)
+                error_slice = output_error[i, j, :]
+                
+                #on multiplie le masque local par l'erreur
+                #l'erreur est diffusée uniquement là où le masque vaut 1
+                input_error[istart:istart+F, jstart:jstart+F, :] += self.mask[istart:istart+F, jstart:jstart+F, :] * error_slice
+        """
+        F = self.pooling_size
+        D = self.input_shape[2]
+        
+        #on aplatit l'erreur
+        output_error = output_error.transpose(2, 0, 1).flatten()
+        
+        #on multiplie le masque par l'erreur
+        dx_col = self.mask * output_error
+        
+        #on remet au format (F*F*D, W2*H2) pour col2im
+        dx_col = dx_col.reshape(F * F * D, -1)
+        
+        #reconstruction de l'image
+        return col2im(dx_col, self.input_shape, F, self.stride)
+
 
 
 class ReluLayer:
@@ -273,13 +347,18 @@ class ReluLayer:
         Returns:
             3D array: Valeurs d'activations de cette couche. Mêmes dimensions que l'input.
         """
-        self.activations = np.where(input < 0, self.alpha * input, input)
-        return self.activations
+        self.input = input
+        return np.where(input < 0, self.alpha * input, input)
+    
+    
+    def backward(self, output_error, learning_rate):
+        grad = np.where(self.input < 0, self.alpha, 1)
+        return output_error * grad
 
 
 
 class FCLayer:
-    """Une couche de neurones dense (fully-connected layer)"""
+    """Une couche de neurones dense (fully connected layer)"""
 
     def __init__(self, input_shape, num_neurons):
         """
@@ -287,13 +366,19 @@ class FCLayer:
             input_shape (tuple à 3 éléments): Dimensions de la couche précédente.
             num_neurons (int): Nombre de neurones.
         """
-        W, H, D = input_shape
-        self.len_input = W * H * D
+        if len(input_shape) == 3:
+            W, H, D = input_shape
+            self.len_input = W * H * D
+
+        else:
+            self.len_input = input_shape[0]
+        
         self.num_neurons = num_neurons
+        self.shape = (self.len_input,)
         
         #initialisation des poids et des biais
         self.weights = np.random.randn(self.num_neurons, self.len_input)
-        self.biases = np.random.randn(self.num_neurons, 1)
+        self.biases = np.random.randn(self.num_neurons)
     
     
     def forward(self, input):
@@ -304,26 +389,100 @@ class FCLayer:
             input (3D array): Activations de la couche précédente.
 
         Returns:
-            2D array: Valeurs d'activations de cette couche. Vecteur colonne de taille num_neurons.
+            1D array: Valeurs d'activations de cette couche. Taille = num_neurons.
         """
-        x = input.reshape(-1, 1)
-        self.activations = self.weights @ x + self.biases
-        return self.activations
+        self.input = input
+        return self.weights @ input.flatten() + self.biases
+    
+
+    def backward(self, output_error, learning_rate):
+        #erreur de l'input
+        input_error = self.weights.T @ output_error
+
+        #gradient des poids et des biais
+        dW = np.outer(output_error, self.input.flatten())
+        dB = output_error
+
+        #mise à jour des poids
+        self.weights -= learning_rate * dW
+        self.biases -= learning_rate * dB
+
+        #propagation de l'erreur
+        return input_error.reshape(self.input.shape)
+    
 
 
 
-cnn = CNN(img_shape=(300,300))
-cnn.addLayer(type="CONV", num_filters=36)
-cnn.addLayer(type="POOL")
-cnn.addLayer(type="RELU")
-cnn.addLayer(type="FC", num_neurons=10)
-img = np.zeros((300, 300, 3))
-print(cnn.forwardProp(img))
 
-m = np.asarray([[[1,3,5], [4,8,0]],
-     [[16, 18, 20], [23, 45, 50]],
-     [[100, 200, 30], [340, 234, 1000]]])
+# ----------------------------------------------------------------------------------------------------------------------------
+#fonctions im2col et col2im
+# ----------------------------------------------------------------------------------------------------------------------------
 
-print(m[1, 1, 0])
-print(m.max(axis=(1, 2)))
+def im2col(input, output_shape, filter_size, stride, padding=(0, 0), padding_mode="none"):
+        if padding_mode == "zeros":
+            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="constant")
 
+        elif padding_mode == "edge":
+            x = np.pad(input, ((padding[0], padding[0]), (padding[1], padding[1]), (0, 0)), mode="edge")
+        
+        else:
+            x = input
+        
+        #dimensions de l'input après padding 
+        W, H, D = x.shape
+
+        #dimenions de l'output
+        F = filter_size
+        W2, H2, D2 = output_shape
+
+        x_col = np.zeros((F * F * D, W2 * H2))
+
+        colonne = 0
+        for i in range(0, W - F + 1, stride):
+            for j in range(0, H - F + 1, stride):
+                x_col[:, colonne] = x[i:i+F, j:j+F, :].flatten()
+                colonne += 1
+        
+        return x_col
+
+
+def col2im(dx_col, input_shape, filter_size, stride, padding=(0, 0)):
+    W, H, D = input_shape
+    pad_w, pad_h = padding
+    W_padded, H_padded = W + 2*pad_w, H + 2*pad_h
+    dx_padded = np.zeros((W_padded, H_padded, D))
+    
+    F = filter_size
+    colonne = 0
+    for i in range(0, W_padded - F + 1, stride):
+        for j in range(0, H_padded - F + 1, stride):
+            #on ajoute (+=) car un pixel peut contribuer à plusieurs convolutions
+            patch = dx_col[:, colonne].reshape(F, F, D)
+            dx_padded[i:i+F, j:j+F, :] += patch
+            colonne += 1
+            
+    #on retire le padding pour retrouver la taille d'origine
+    if pad_w > 0 or pad_h > 0:
+        return dx_padded[pad_w:-pad_w, pad_h:-pad_h, :]
+    return dx_padded
+
+
+
+
+
+if __name__ == "__main__":
+
+
+    cnn = CNN(img_shape=(300,300))
+    cnn.addLayer(type="CONV", num_filters=36)
+    cnn.addLayer(type="RELU")
+    cnn.addLayer(type="POOL")
+    cnn.addLayer(type="FC", num_neurons=10)
+    img = np.random.uniform(0, 1, size=(300, 300, 3))
+    print(cnn.forwardProp(img))
+
+
+
+    v = np.asarray([[1], [2], [3]])
+    a = np.ones((1, 3))
+    b = np.ones(3)
