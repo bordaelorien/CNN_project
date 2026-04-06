@@ -1,11 +1,12 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 class CNN:
     """Réseau de neurones convolutif"""
 
     def __init__(self, img_shape):
         self.layers = [] #liste des couches de neurones
-        self.img_shape = (*img_shape, 1) #taille de l'image en entrée (image RGB donc la troisième dimension est 3)
+        self.img_shape = img_shape #taille de l'image en entrée
     
 
     def addLayer(self, type, **kwargs):
@@ -27,7 +28,7 @@ class CNN:
             new_layer = PoolLayer(input_shape, **kwargs)
 
         elif type == "RELU":
-            new_layer = ReluLayer(input_shape)
+            new_layer = ReluLayer(input_shape, **kwargs)
 
         elif type == "FC":
             new_layer = FCLayer(input_shape, **kwargs)
@@ -42,29 +43,48 @@ class CNN:
     
 
 
-    def train(self, x_train, y_train, x_test, y_test, batch_size=10, epochs=20, learning_rate=0.005):
+    def train(self, x_train, y_train, x_test, y_test, batch_size=50, epochs=5, learning_rate=0.005):
         n_samples = len(x_train)
+        success_rate_list = []
         
         for epoch in range(epochs):
-            indices = np.arange(n_samples)
-            batch_idx = np.random.choice(indices, batch_size)
-            
-            for i in batch_idx:
-                image = x_train[i]
-                label = y_train[i]
-                
-                #forward pass
-                output = self.forwardProp(image)
-                
-                #encodage one hot
-                target = np.zeros_like(output)
-                target[label] = 1
-                
-                #backward pass
-                self.backwardProp(output, target, learning_rate)
+            #le taux d'apprentissage est divisé par 2 toutes les 10 epochs
+            if epoch > 0 and epoch % 4 == 0 :
+                learning_rate /= 2
 
-            tx_reussite = self.test(x_test, y_test) 
-            print(f"Époque {epoch+1}/{epochs} - Taux de réussite: {tx_reussite:.2f}")
+            #mélange aléatoire du dataset
+            indices = np.random.permutation(n_samples)
+            x_shuffled = x_train[indices]
+            y_shuffled = y_train[indices]
+            
+             #découpage en mini-batches
+            for start in range(0, n_samples, batch_size):
+                x_batch = x_shuffled[start:start + batch_size]
+                y_batch = y_shuffled[start:start + batch_size]
+
+                for image, label in zip(x_batch, y_batch):
+                    #forward pass
+                    output = self.forwardProp(image)
+                    
+                    #encodage one-hot
+                    target = np.zeros_like(output)
+                    target[label] = 1
+                    
+                    #backward pass
+                    self.backwardProp(output, target, learning_rate / len(x_batch))
+
+            #affichage du taux de réussite sur les images tests à la fin de chaque epoch
+            success_rate = self.test(x_test, y_test)
+            success_rate_list.append(success_rate)
+            print(f"Époque {epoch+1}/{epochs} - Taux de réussite: {success_rate:.2f}")
+
+        #représentation graphique de l'apprentissage
+        indices = range(1, epochs+1)
+        plt.xlabel("Époque")
+        plt.ylabel("Taux de réussite")
+        plt.title("Courbe d'apprentissage")
+        plt.plot(idx, success_rate_list)
+        plt.show()
 
 
     def test(self, x_test, y_test):
@@ -97,8 +117,9 @@ class CNN:
 
         #forward propagation à travers toutes les couches du réseau
         activations = input_image
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             activations = layer.forward(activations)
+            #print(f"Layer {i} ({type(layer).__name__}) shape: {activations.shape}, mean: {np.mean(activations)}")
         
         return self.softmax(activations)
         
@@ -178,8 +199,9 @@ class ConvLayer:
         self.shape = (W2, H2, D2)
 
         #initialisation des filtres et des biais
-        self.filters = np.random.randn(num_filters, filter_size, filter_size, D1)
-        self.biases = np.random.randn(num_filters, 1)
+        std = np.sqrt(2 / (filter_size * filter_size * D1))
+        self.filters = np.random.randn(num_filters, filter_size, filter_size, D1) * std
+        self.biases = np.ones((num_filters, 1)) * 0.01
 
 
     def forward(self, input):
@@ -245,40 +267,6 @@ class PoolLayer:
 
 
     def forward(self, input):
-        """Applique une opération de max pooling à l'input.
-
-        Args:
-            input (array 3D de dim W1 x H1 x D1): Activations de la couche précédente.
-
-        Returns:
-            array 3D de dim W2 x H2 x D2 : Valeurs d'activation de cette couche.  
-                W2 = 1 + (W2 - pooling_size)/stride, H2 = 1 + (H2 - pooling_size)/stride, D2 = D1
-        """ 
-        """
-        self.input = input
-        F = self.pooling_size
-        W2, H2, D2 = self.shape
-
-        output = np.zeros(self.shape)
-        #masque qui retient les indices des valeurs maximales, il est utile dans la backward
-        self.mask = np.zeros_like(self.input)
-
-        for i in range(W2):
-            for j in range(H2):
-                istart, jstart = i * self.stride, j * self.stride
-                region = input[istart:istart+F, jstart:jstart+F, :]
-                
-                #calcul du max sur la région
-                output[i, j, :] = np.max(region, axis=(0, 1))
-
-                for d in range(D2):
-                    #dans chaque canal, on cherche l'indice de la/les valeur(s) max
-                    max_value = output[i, j, d]
-
-                    #on met à jour le masque dans la région
-                    local_mask = (region[:, :, d] == max_value)
-                    self.mask[istart:istart+F, jstart:jstart+F, d] += local_mask
-        """
         self.input_shape = input.shape
         F = self.pooling_size
         D = self.input_shape[2]
@@ -298,21 +286,6 @@ class PoolLayer:
 
     
     def backward(self, output_error, learning_rate):
-        """input_error = np.zeros_like(self.input)
-        W2, H2, D2 = self.shape
-        F = self.pooling_size
-
-        for i in range(W2):
-            for j in range(H2):
-                istart, jstart = i * self.stride, j * self.stride
-                
-                #on récupère l'erreur du pixel (i, j)
-                error_slice = output_error[i, j, :]
-                
-                #on multiplie le masque local par l'erreur
-                #l'erreur est diffusée uniquement là où le masque vaut 1
-                input_error[istart:istart+F, jstart:jstart+F, :] += self.mask[istart:istart+F, jstart:jstart+F, :] * error_slice
-        """
         F = self.pooling_size
         D = self.input_shape[2]
         
@@ -374,11 +347,11 @@ class FCLayer:
             self.len_input = input_shape[0]
         
         self.num_neurons = num_neurons
-        self.shape = (self.len_input,)
+        self.shape = (self.num_neurons,)
         
         #initialisation des poids et des biais
-        self.weights = np.random.randn(self.num_neurons, self.len_input)
-        self.biases = np.random.randn(self.num_neurons)
+        self.weights = np.random.randn(self.num_neurons, self.len_input) * np.sqrt(2 / self.len_input)
+        self.biases = np.zeros(self.num_neurons)
     
     
     def forward(self, input):
@@ -473,7 +446,7 @@ def col2im(dx_col, input_shape, filter_size, stride, padding=(0, 0)):
 if __name__ == "__main__":
 
 
-    cnn = CNN(img_shape=(300,300))
+    cnn = CNN(img_shape=(300,300, 3))
     cnn.addLayer(type="CONV", num_filters=36)
     cnn.addLayer(type="RELU")
     cnn.addLayer(type="POOL")
@@ -481,8 +454,7 @@ if __name__ == "__main__":
     img = np.random.uniform(0, 1, size=(300, 300, 3))
     print(cnn.forwardProp(img))
 
-
-
-    v = np.asarray([[1], [2], [3]])
-    a = np.ones((1, 3))
-    b = np.ones(3)
+    idx = range(10)
+    y = range(0, 20, 2)
+    plt.plot(idx, y)
+    plt.show()
