@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 
 class CNN:
     """Réseau de neurones convolutif"""
@@ -33,6 +34,9 @@ class CNN:
         elif type == "FC":
             new_layer = FCLayer(input_shape, **kwargs)
 
+        elif type == "DROPOUT":
+            new_layer = DropoutLayer(input_shape, **kwargs)
+
         else:
             raise ValueError(f"'{type}' n'est pas un type de couche correcte. " \
                             "Les quatre types de couches sont 'CONV', 'POOL', 'RELU', 'FC'.")
@@ -48,8 +52,10 @@ class CNN:
         success_rate_list = []
         
         for epoch in range(epochs):
+            start_time = time.time()
+
             #le taux d'apprentissage est divisé par 2 toutes les 10 epochs
-            if epoch > 0 and epoch % 4 == 0 :
+            if epoch > 0 and epoch % 5 == 0 :
                 learning_rate /= 2
 
             #mélange aléatoire du dataset
@@ -57,7 +63,7 @@ class CNN:
             x_shuffled = x_train[indices]
             y_shuffled = y_train[indices]
             
-             #découpage en mini-batches
+            #découpage en mini-batches
             for start in range(0, n_samples, batch_size):
                 x_batch = x_shuffled[start:start + batch_size]
                 y_batch = y_shuffled[start:start + batch_size]
@@ -76,18 +82,31 @@ class CNN:
             #affichage du taux de réussite sur les images tests à la fin de chaque epoch
             success_rate = self.test(x_test, y_test)
             success_rate_list.append(success_rate)
-            print(f"Époque {epoch+1}/{epochs} - Taux de réussite: {success_rate:.2f}")
+            print(f"Époque {epoch+1}/{epochs} - Taux de réussite: {success_rate:.2f} %")
+
+            end_time = time.time()
+            epoch_duration = end_time - start_time
+            print(f"Durée de l'époque : {epoch_duration // 60 :.0f} min {epoch_duration % 60 :.0f} s")
 
         #représentation graphique de l'apprentissage
         indices = range(1, epochs+1)
         plt.xlabel("Époque")
         plt.ylabel("Taux de réussite")
         plt.title("Courbe d'apprentissage")
-        plt.plot(idx, success_rate_list)
+        plt.plot(indices, success_rate_list)
         plt.show()
 
 
+    def setTraining(self, training):
+        for layer in self.layers:
+            if isinstance(layer, DropoutLayer):
+                layer.training = training
+
+
     def test(self, x_test, y_test):
+        #on désactive le dropout en mode test
+        self.setTraining(False)
+
         #nombre d'images correctement identifiées
         score = 0
 
@@ -95,6 +114,9 @@ class CNN:
             output = np.argmax(self.forwardProp(image).flatten())
             if output == label:
                 score += 1
+
+        #on réactive le dropout
+        self.setTraining(True)
 
         #taux de réussite  
         return score*100/len(x_test)
@@ -383,6 +405,44 @@ class FCLayer:
         #propagation de l'erreur
         return input_error.reshape(self.input.shape)
     
+
+
+
+class DropoutLayer:
+    """Couche de dropout."""
+
+    def __init__(self, input_shape, dropout_rate=0.5):
+        """"
+        Args:
+            input_shape (tuple à 3 éléments): Dimensions de la couche précédente.
+            dropout_rate (float): Proportion de neurones désactivés. Defaults to 0.5.
+        """
+        self.shape = input_shape
+        self.dropout_rate = dropout_rate
+        self.training = True #à basculer en False pour le test
+
+
+    def forward(self, input):
+        if not self.training:
+            return input #pas de dropout en mode test
+        
+        #masque binaire, 0 si neurone désactivé, 1 si actif
+        self.mask = (np.random.rand(*input.shape) > self.dropout_rate)
+        
+        #inverted dropout : on rescale pour garder l'espérance constante
+        return input * self.mask / (1 - self.dropout_rate)
+
+    
+    def backward(self, output_error, learning_rate):
+        return output_error * self.mask / (1 - self.dropout_rate)
+
+
+
+
+
+
+
+
 
 
 
