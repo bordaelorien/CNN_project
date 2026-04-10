@@ -39,7 +39,7 @@ class CNN:
 
         else:
             raise ValueError(f"'{type}' n'est pas un type de couche correcte. " \
-                            "Les quatre types de couches sont 'CONV', 'POOL', 'RELU', 'FC'.")
+                            "Les cinq types de couches sont 'CONV', 'POOL', 'RELU', 'FC', 'DROPOUT'.")
 
         #ajout de la couche à la liste
         self.layers.append(new_layer)
@@ -55,7 +55,7 @@ class CNN:
             start_time = time.time()
 
             #le taux d'apprentissage est divisé par 2 toutes les 10 epochs
-            if epoch > 0 and epoch % 5 == 0 :
+            if epoch > 0 and epoch % 10 == 0 :
                 learning_rate /= 2
 
             #mélange aléatoire du dataset
@@ -90,7 +90,7 @@ class CNN:
 
         #représentation graphique de l'apprentissage
         indices = range(1, epochs+1)
-        plt.xlabel("Époque")
+        plt.xlabel("Epoch")
         plt.ylabel("Taux de réussite")
         plt.title("Courbe d'apprentissage")
         plt.plot(indices, success_rate_list)
@@ -139,9 +139,8 @@ class CNN:
 
         #forward propagation à travers toutes les couches du réseau
         activations = input_image
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             activations = layer.forward(activations)
-            #print(f"Layer {i} ({type(layer).__name__}) shape: {activations.shape}, mean: {np.mean(activations)}")
         
         return self.softmax(activations)
         
@@ -179,6 +178,39 @@ class CNN:
         """
         exp_x = np.exp(x - np.max(x))
         return exp_x / exp_x.sum(axis=0)
+    
+
+    def saveModel(self, path="model.npz"):
+        arrays = {}
+
+        #pour chaque couche, on récupère ses poids
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, ConvLayer):
+                arrays[f"layer_{i}_filters"] = layer.filters
+                arrays[f"layer_{i}_biases"]  = layer.biases
+
+            elif isinstance(layer, FCLayer):
+                arrays[f"layer_{i}_weights"] = layer.weights
+                arrays[f"layer_{i}_biases"]  = layer.biases
+
+        #on enregistre les arrays de poids dans un fichier npz
+        np.savez(path, **arrays)
+
+
+
+    def loadModel(self, path="model.npz"):
+        #on charge le fichier npz qui contient les arrays de poids pour chaque couche
+        data = np.load(path)
+
+        #on initialise les poids de chaque couche avec les données récupérées
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, ConvLayer):
+                layer.filters = data[f"layer_{i}_filters"]
+                layer.biases  = data[f"layer_{i}_biases"]
+
+            elif isinstance(layer, FCLayer):
+                layer.weights = data[f"layer_{i}_weights"]
+                layer.biases  = data[f"layer_{i}_biases"]
 
 
 
@@ -187,7 +219,7 @@ class CNN:
 class ConvLayer:
     """Une couche de neurones convolutive"""
 
-    def __init__(self, input_shape, *, num_filters, filter_size=3, stride=1, padding="zeros"):
+    def __init__(self, input_shape, *, num_filters, filter_size=3, stride=1, padding="zeros", momentum=0.9):
         """
         Args:
             input_shape (tuple à trois éléments): Dimensions de la couche précédente
@@ -202,6 +234,7 @@ class ConvLayer:
         self.stride = stride
         self.padding_mode = padding
         self.input_shape = input_shape
+        self.momentum = momentum
 
         #calcul des dimensions de l'output et du padding
         W1, H1, D1 = input_shape
@@ -224,6 +257,10 @@ class ConvLayer:
         std = np.sqrt(2 / (filter_size * filter_size * D1))
         self.filters = np.random.randn(num_filters, filter_size, filter_size, D1) * std
         self.biases = np.ones((num_filters, 1)) * 0.01
+
+        #initialisation du momentum
+        self.v_filters = np.zeros_like(self.filters)
+        self.v_biases  = np.zeros_like(self.biases)
 
 
     def forward(self, input):
@@ -253,9 +290,12 @@ class ConvLayer:
         dF = dF.reshape(self.filters.shape)
         dB = np.sum(output_error, axis=1).reshape(D2, 1)
 
-        #mise à jour des poids
-        self.filters -= learning_rate * dF
-        self.biases -= learning_rate * dB
+        #mise à jour des poids et momentum
+        self.v_filters = self.momentum * self.v_filters - learning_rate * dF
+        self.v_biases  = self.momentum * self.v_biases  - learning_rate * dB
+
+        self.filters += self.v_filters
+        self.biases  += self.v_biases
 
         #calcul de l'erreur de l'input
         f_row = self.filters.reshape(self.num_filters, -1)
@@ -355,7 +395,7 @@ class ReluLayer:
 class FCLayer:
     """Une couche de neurones dense (fully connected layer)"""
 
-    def __init__(self, input_shape, num_neurons):
+    def __init__(self, input_shape, num_neurons, momentum=0.9):
         """
         Args:
             input_shape (tuple à 3 éléments): Dimensions de la couche précédente.
@@ -370,10 +410,16 @@ class FCLayer:
         
         self.num_neurons = num_neurons
         self.shape = (self.num_neurons,)
+        self.momentum = momentum
         
         #initialisation des poids et des biais
         self.weights = np.random.randn(self.num_neurons, self.len_input) * np.sqrt(2 / self.len_input)
         self.biases = np.zeros(self.num_neurons)
+
+        #initialisation du momentum
+        self.v_weights = np.zeros_like(self.weights)
+        self.v_biases  = np.zeros_like(self.biases)
+
     
     
     def forward(self, input):
@@ -398,9 +444,12 @@ class FCLayer:
         dW = np.outer(output_error, self.input.flatten())
         dB = output_error
 
-        #mise à jour des poids
-        self.weights -= learning_rate * dW
-        self.biases -= learning_rate * dB
+        #mise à jour des poids et momentum
+        self.v_weights = self.momentum * self.v_weights - learning_rate * dW
+        self.v_biases  = self.momentum * self.v_biases  - learning_rate * dB
+
+        self.weights += self.v_weights
+        self.biases  += self.v_biases
 
         #propagation de l'erreur
         return input_error.reshape(self.input.shape)
@@ -432,7 +481,7 @@ class DropoutLayer:
         #inverted dropout : on rescale pour garder l'espérance constante
         return input * self.mask / (1 - self.dropout_rate)
 
-    
+     
     def backward(self, output_error, learning_rate):
         return output_error * self.mask / (1 - self.dropout_rate)
 
